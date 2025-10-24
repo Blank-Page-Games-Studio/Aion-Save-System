@@ -1,21 +1,21 @@
 {
     "name": "com.bpg.aion",
     "displayName": "Aion",
-    "version": "0.2.0",
-    "unity": "2022.3",
+    "version": "0.3.0",
+    "unity": "6000.2",
     "description": "Aion — a deterministic, versioned save system for Unity that preserves and restores game state with precision and permanence.",
     "keywords": [
         "save",
         "persistence",
         "encryption"
     ],
-    "license": "MIT",
-    "documentationUrl": "https://github.com/your-org/your-repo#readme",
-    "changelogUrl": "https://github.com/your-org/your-repo/releases",
-    "licensesUrl": "https://github.com/your-org/your-repo/blob/main/LICENSE",
+    "license": "Apache-2.0",
+    "documentationUrl": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System#readme",
+    "changelogUrl": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System/releases",
+    "licensesUrl": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System/blob/main/LICENSE",
     "repository": {
         "type": "git",
-        "url": "https://github.com/your-org/your-repo.git"
+        "url": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git"
     },
     "samples": [
         {
@@ -32,6 +32,6 @@
     },
     "author": {
         "name": "BPG",
-        "url": "https://your-site.example"
+        "url": "https://blankpagegames.com"
     }
 }
