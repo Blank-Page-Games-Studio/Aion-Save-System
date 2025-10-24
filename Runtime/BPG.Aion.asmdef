@@ -1,0 +1,25 @@
+{
+    "name": "Aion.SaveSystem.Runtime",
+    "rootNamespace": "BPG.SaveSystem",
+    "references": [
+        "UnityEngine",
+        "UnityEngine.CoreModule",
+        "UnityEngine.JSONSerializeModule",
+        "UnityEngine.UIElementsModule"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "autoReferenced": true,
+    "noEngineReferences": false,
+    "defineConstraints": [],
+    "optionalUnityReferences": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.nuget.newtonsoft-json",
+            "expression": "3.2.1",
+            "define": "USE_NEWTONSOFT_JSON"
+        }
+    ]
+}

@@ -1,0 +1,37 @@
+{
+    "name": "com.bpg.aion",
+    "displayName": "Aion",
+    "version": "0.2.0",
+    "unity": "2022.3",
+    "description": "Aion — a deterministic, versioned save system for Unity that preserves and restores game state with precision and permanence.",
+    "keywords": [
+        "save",
+        "persistence",
+        "encryption"
+    ],
+    "license": "MIT",
+    "documentationUrl": "https://github.com/your-org/your-repo#readme",
+    "changelogUrl": "https://github.com/your-org/your-repo/releases",
+    "licensesUrl": "https://github.com/your-org/your-repo/blob/main/LICENSE",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/your-org/your-repo.git"
+    },
+    "samples": [
+        {
+            "displayName": "Basic Usage",
+            "description": "Basic setup and first save/load example.",
+            "path": "Samples~/Basic Usage"
+        }
+    ],
+    "dependencies": {
+        "com.unity.modules.jsonserialize": "1.0.0",
+        "com.unity.nuget.newtonsoft-json": "3.2.1",
+        "com.unity.modules.uielements": "1.0.0",
+        "com.unity.test-framework": "1.3.7"
+    },
+    "author": {
+        "name": "BPG",
+        "url": "https://your-site.example"
+    }
+}
