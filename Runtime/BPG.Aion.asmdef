@@ -1,11 +1,12 @@
 {
-    "name": "Aion.SaveSystem.Runtime",
-    "rootNamespace": "BPG.SaveSystem",
+    "name": "Aion.Aion.Runtime",
+    "rootNamespace": "BPG.Aion",
     "references": [
         "UnityEngine",
         "UnityEngine.CoreModule",
         "UnityEngine.JSONSerializeModule",
-        "UnityEngine.UIElementsModule"
+        "UnityEngine.UIElementsModule",
+        "BPG.Aion.Editor"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

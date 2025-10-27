@@ -1,7 +1,9 @@
 {
     "name": "BPG.Aion.Editor",
     "rootNamespace": "BPG.Aion.Editor",
-    "references": [],
+    "references": [
+        "BPG.Aion"
+    ],
     "includePlatforms": [
         "Editor"
     ],
