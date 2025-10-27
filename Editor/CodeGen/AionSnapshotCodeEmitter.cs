@@ -9,7 +9,6 @@ using System.Text;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
-using static BPG.Aion.Samples.SampleSaveTarget;
 
 namespace BPG.Aion
 {
