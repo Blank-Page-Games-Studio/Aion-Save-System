@@ -1,13 +1,7 @@
 {
-    "name": "Aion.Aion.Runtime",
+    "name": "BPG.Aion",
     "rootNamespace": "BPG.Aion",
-    "references": [
-        "UnityEngine",
-        "UnityEngine.CoreModule",
-        "UnityEngine.JSONSerializeModule",
-        "UnityEngine.UIElementsModule",
-        "BPG.Aion.Editor"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
