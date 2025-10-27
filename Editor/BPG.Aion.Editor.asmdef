@@ -1,16 +1,16 @@
 {
-    "name": "Aion.SaveSystem.Tests",
-    "rootNamespace": "BPG.SaveSystem.Tests",
-    "references": [
-        "Aion.SaveSystem.Runtime",
-        "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
-    ],
+    "name": "BPG.Aion.Editor",
+    "rootNamespace": "BPG.Aion.Editor",
+    "references": [],
     "includePlatforms": [
         "Editor"
     ],
+    "excludePlatforms": [],
     "allowUnsafeCode": false,
-    "autoReferenced": false,
-    "optionalUnityReferences": [],
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
     "noEngineReferences": false
 }

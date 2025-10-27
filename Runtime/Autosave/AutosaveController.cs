@@ -8,6 +8,7 @@ namespace BPG.Aion
 {
     /// <summary>
     /// Periodic autosave controller with rolling backups: slot_autosave_{k}.bpgsave.
+    /// Uses the async SaveAutosaveAsync API from Phase 3.
     /// </summary>
     public sealed class AutosaveController : MonoBehaviour
     {
@@ -30,7 +31,9 @@ namespace BPG.Aion
             UseCompression = true,
             UseEncryption = false,
             ProfileName = "Default",
-            Summary = "Autosave"
+            Summary = "Autosave",
+            // AppVersion should be set at runtime (not in field initializer) if you need it:
+            // AppVersion = Application.version
         };
 
         public void Configure(SaveManager manager, SaveOptions options, string profile, int intervalSeconds, int maxRollingBackups, bool enabled, bool onSceneChange)
@@ -49,6 +52,10 @@ namespace BPG.Aion
             _timer = 0f;
             if (_onSceneChange)
                 SceneManager.activeSceneChanged += OnActiveSceneChanged;
+
+            // Ensure AppVersion is set at runtime to avoid Unity constructor restrictions
+            if (string.IsNullOrEmpty(_options.AppVersion))
+                _options.AppVersion = Application.version;
         }
 
         private void OnDestroy()
@@ -69,14 +76,14 @@ namespace BPG.Aion
                 if (_sceneChangeTimer >= _sceneChangeDebounceSeconds)
                 {
                     _sceneChangeTimer = -1f;
-                    TriggerAutosave();
+                    TriggerAutosave(); // fire and forget
                 }
             }
 
             if (_timer >= _intervalSeconds)
             {
                 _timer = 0f;
-                TriggerAutosave();
+                TriggerAutosave(); // fire and forget
             }
         }
 
@@ -86,9 +93,9 @@ namespace BPG.Aion
             _sceneChangeTimer = 0f; // debounce
         }
 
-        private void TriggerAutosave()
+        private async void TriggerAutosave()
         {
-            if (_busy) return;
+            if (_busy || _manager == null) return;
             _busy = true;
             try
             {
@@ -96,7 +103,7 @@ namespace BPG.Aion
                 var t = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 var index = (int)(t % _maxRollingBackups);
 
-                // Explicit deep copy of SaveOptions for autosave
+                // Explicit copy of SaveOptions for this autosave
                 var opts = new SaveOptions
                 {
                     UseCompression = _options.UseCompression,
@@ -104,10 +111,15 @@ namespace BPG.Aion
                     ProfileName = _profile,
                     Summary = _summary,
                     ContentType = _options.ContentType,
-                    AppVersion = _options.AppVersion
+                    AppVersion = string.IsNullOrEmpty(_options.AppVersion) ? Application.version : _options.AppVersion
                 };
 
-                _manager.SaveAutosave(index, opts);
+                // Phase 3 async API
+                await _manager.SaveAutosaveAsync(index, opts);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Autosave failed: {ex.Message}");
             }
             finally
             {

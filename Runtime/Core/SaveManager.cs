@@ -1,26 +1,33 @@
 ﻿// com.bpg.aion/Runtime/Core/SaveManager.cs
 #nullable enable
 using System;
+using System.Buffers;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace BPG.Aion
 {
     /// <summary>
-    /// Orchestrates snapshot capture, transform pipeline, file IO, metadata, and integrity checks.
-    /// 
-    /// Transform order (documented & enforced):
-    ///   1) Serialize body (Components) to JSON bytes using ISerializer.
-    ///   2) If UseCompression: Compress(body) -> compressedBody.
-    ///   3) If UseEncryption: Encrypt(bodyOrCompressed) with AES-GCM using:
-    ///        - Nonce: 12 random bytes per save.
-    ///        - AAD: UTF-8 bytes of the header JSON with Encrypt fields set but Checksum empty (Checksum = "").
-    ///        - Output: ciphertext + tag (store nonce & tag in header Base64).
-    ///   4) Compute SHA-256 hex checksum over the FINAL BODY BYTES (ciphertext if encrypted, else compressed/plain).
-    ///   5) Write file: Header JSON (plaintext) + newline + FINAL BODY BYTES (raw).
+    /// Save/Load orchestrator with streaming writes, async APIs, progress and diagnostics.
+    ///
+    /// File format:
+    ///   - First line: Header JSON (UTF-8, plaintext)
+    ///   - Newline (0x0A)
+    ///   - Body bytes: serialized Components[] possibly compressed and/or encrypted
+    ///
+    /// Transform order:
+    ///   Serialize → (optional) Compress → (optional) Encrypt → Checksum(over FINAL BODY BYTES).
+    ///
+    /// Notes for Unity JsonUtility:
+    ///   - JsonUtility cannot serialize top-level arrays or primitives/strings.
+    ///   - We wrap the components array in { Items:[...] } and each field value in Box<T> { Value: ... }.
     /// </summary>
     public sealed class SaveManager
     {
@@ -30,6 +37,10 @@ namespace BPG.Aion
         private readonly ICompressor? _compressor;
         private readonly IEncryptor? _encryptor;
 
+        // Streaming settings
+        private const int CHUNK_SIZE = 256 * 1024;               // 256 KiB per chunk
+        private const long STREAM_THRESHOLD = 32L * 1024 * 1024; // 32 MiB body to enable streaming pipeline
+
         public SaveManager(ISerializer serializer, FileSystemStorage storage, ICompressor? compressor = null, IEncryptor? encryptor = null)
         {
             _serializer = serializer;
@@ -38,347 +49,378 @@ namespace BPG.Aion
             _encryptor = encryptor;
         }
 
-        /// <summary>Register a save participant.</summary>
-        public void Register(ISaveable saveable)
-        {
-            if (saveable == null) return;
-            if (!_saveables.Contains(saveable)) _saveables.Add(saveable);
-        }
+        public void Register(ISaveable s) { if (s != null && !_saveables.Contains(s)) _saveables.Add(s); }
+        public void Unregister(ISaveable s) { if (s != null) _saveables.Remove(s); }
 
-        /// <summary>Unregister a save participant.</summary>
-        public void Unregister(ISaveable saveable)
-        {
-            if (saveable == null) return;
-            _saveables.Remove(saveable);
-        }
+        // --------- Async APIs ---------
 
-        // ---------------- Public API ----------------
+        public Task<SaveResult> SaveAsync(int slot, SaveOptions options, IProgress<float>? progress = null, CancellationToken token = default)
+            => SaveInternalAsync(slot, options, autosaveIndex: null, progress, token);
 
-        public SaveResult Save(int slot, SaveOptions? options = null)
+        public Task<SaveResult> SaveAutosaveAsync(int index, SaveOptions options, IProgress<float>? progress = null, CancellationToken token = default)
+            => SaveInternalAsync(slot: -1, options, autosaveIndex: index, progress, token);
+
+        public async Task<LoadResult> LoadAsync(int slot, LoadOptions options, IProgress<float>? progress = null, CancellationToken token = default)
         {
-            var opts = options ?? new SaveOptions();
-            var profile = opts.ProfileName ?? "Default";
+            var profile = options.ProfileName ?? "Default";
             var slotKey = $"slot_{slot}";
-            SaveSignals.EmitBeforeSave(profile, slotKey, opts);
+            SaveSignals.EmitBeforeLoad(profile, slotKey, options);
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try
-            {
-                foreach (var s in _saveables) s.OnBeforeSave();
-
-                var file = BuildLogicalFile(profile, opts);
-                // Serialize body (Components) deterministically
-                var bodyJson = _serializer.Serialize(file.Components);
-                var bodyBytes = Encoding.UTF8.GetBytes(bodyJson);
-
-                // Compression
-                byte[] transformed = bodyBytes;
-                string? compressName = null;
-                if (opts.UseCompression && _compressor != null)
-                {
-                    transformed = _compressor.Compress(transformed);
-                    compressName = _compressor.Name;
-                }
-
-                // Encryption
-                string? encryptName = null;
-                byte[]? nonce = null;
-                byte[]? tag = null;
-                try
-                {
-                    if (opts.UseEncryption && _encryptor != null)
-                    {
-                        encryptName = _encryptor.Name;
-                        nonce = RandomNonce(12);
-                        // Prepare header prior to checksum & encryption: set transforms but empty checksum/tag
-                        file.Header.Encrypt = encryptName;
-                        file.Header.NonceB64 = Convert.ToBase64String(nonce);
-                        file.Header.TagB64 = null; // not yet
-                        file.Header.Compress = compressName;
-                        file.Header.Checksum = string.Empty;
-                        file.Header.AppVersion = opts.AppVersion;
-                        file.Header.ContentType = opts.ContentType;
-                        file.Header.Summary = opts.Summary;
-                        // AAD: header JSON with empty checksum
-                        var aad = Encoding.UTF8.GetBytes(_serializer.Serialize(file.Header));
-                        var ct = _encryptor.Encrypt(transformed, nonce, aad, out var tagOut);
-                        tag = tagOut;
-                        transformed = ct;
-                    }
-                    else
-                    {
-                        // Set transforms without encryption
-                        file.Header.Encrypt = null;
-                        file.Header.NonceB64 = null;
-                        file.Header.TagB64 = null;
-                        file.Header.Compress = compressName;
-                        file.Header.Checksum = string.Empty;
-                        file.Header.AppVersion = opts.AppVersion;
-                        file.Header.ContentType = opts.ContentType;
-                        file.Header.Summary = opts.Summary;
-                    }
-                }
-                catch (NotSupportedException nse)
-                {
-                    return new SaveResult(ResultStatus.Error, $"Encryption not supported: {nse.Message}", _storage.PathForSlot(profile, slot));
-                }
-
-                // Final checksum over transformed body bytes
-                var checksum = Checksum.Sha256HexBytes(transformed);
-                file.Header.Checksum = checksum;
-                if (encryptName != null && tag != null)
-                    file.Header.TagB64 = Convert.ToBase64String(tag);
-
-                // Header JSON plaintext
-                var headerJson = _serializer.Serialize(file.Header);
-                var headerBytes = Encoding.UTF8.GetBytes(headerJson);
-
-                // Compose on-disk format: header JSON + '\n' + body bytes
-                var outPath = _storage.PathForSlot(profile, slot);
-                var bytes = new byte[headerBytes.Length + 1 + transformed.Length];
-                Buffer.BlockCopy(headerBytes, 0, bytes, 0, headerBytes.Length);
-                bytes[headerBytes.Length] = (byte)'\n';
-                Buffer.BlockCopy(transformed, 0, bytes, headerBytes.Length + 1, transformed.Length);
-
-                _storage.WriteBytes(outPath, bytes);
-
-                var duration = sw.ElapsedMilliseconds;
-                WriteMetadataManual(slot, profile, duration, opts.Summary, bytes.Length);
-
-                foreach (var s in _saveables) s.OnAfterLoad(); // optional post-save hook; can be OnAfterSave if you add it
-
-                var res = new SaveResult(ResultStatus.Ok, "Saved.", outPath);
-                SaveSignals.EmitAfterSave(profile, slotKey, duration, res);
-                return res;
-            }
-            catch (UnauthorizedAccessException uae)
-            {
-                var res = new SaveResult(ResultStatus.Unauthorized, $"Unauthorized: {uae.Message}", _storage.PathForSlot(profile, slot));
-                SaveSignals.EmitAfterSave(profile, slotKey, sw.ElapsedMilliseconds, res);
-                return res;
-            }
-            catch (Exception ex)
-            {
-                var res = new SaveResult(ResultStatus.Error, $"Save failed: {ex.Message}", _storage.PathForSlot(profile, slot));
-                SaveSignals.EmitAfterSave(profile, slotKey, sw.ElapsedMilliseconds, res);
-                return res;
-            }
-        }
-
-        public LoadResult Load(int slot, LoadOptions? options = null)
-        {
-            var opts = options ?? new LoadOptions();
-            var profile = opts.ProfileName ?? "Default";
-            var slotKey = $"slot_{slot}";
-            SaveSignals.EmitBeforeLoad(profile, slotKey, opts);
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
             var path = _storage.PathForSlot(profile, slot);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             try
             {
                 if (!_storage.Exists(path))
                 {
-                    var nf = new LoadResult(ResultStatus.NotFound, "Slot not found.", path);
+                    var nf = new LoadResult(ResultStatus.NotFound, SaveErrorTranslator.Friendly(ResultStatus.NotFound), path, durationMs: 0, bytesRead: 0, recoveredFromBackup: false);
                     SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, nf);
                     return nf;
                 }
 
-                var all = _storage.ReadBytes(path);
-                // Split header and body at first '\n'
-                var idx = Array.IndexOf(all, (byte)'\n');
-                if (idx <= 0) return FinalCorrupt("Malformed save (no header separator).", profile, slotKey, sw, path);
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, CHUNK_SIZE, useAsync: true);
 
-                var headerBytes = new byte[idx];
-                Buffer.BlockCopy(all, 0, headerBytes, 0, idx);
-                var bodyBytes = new byte[all.Length - idx - 1];
-                Buffer.BlockCopy(all, idx + 1, bodyBytes, 0, bodyBytes.Length);
-
-                var headerJson = Encoding.UTF8.GetString(headerBytes);
+                // Read the header line as raw bytes to avoid StreamReader prefetching into the body.
+                var headerLineBytes = await ReadHeaderLineBytesAsync(fs, token);
+                var headerJson = Encoding.UTF8.GetString(headerLineBytes);
                 var header = _serializer.Deserialize<SaveHeader>(headerJson);
 
-                // Verify checksum (over stored body bytes)
-                var computed = Checksum.Sha256HexBytes(bodyBytes);
-                if (!string.Equals(computed, header.Checksum, StringComparison.OrdinalIgnoreCase))
-                    return FinalCorrupt("Checksum mismatch.", profile, slotKey, sw, path);
+                // Read the remainder as the body, from the exact position after '\n'
+                var bodyBytes = await ReadToEndAsync(fs, progress, token);
 
-                // If encrypted, decrypt using header AAD (header with same checksum value as stored)
-                if (!string.IsNullOrEmpty(header.Encrypt))
+                // Verify checksum BEFORE any transform (checksum is over stored body bytes)
+                var checksum = ChecksumHex(bodyBytes);
+                if (!string.Equals(checksum, header.Checksum, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (_encryptor == null || string.IsNullOrEmpty(header.NonceB64) || string.IsNullOrEmpty(header.TagB64))
-                        return FinalCorrupt("Encrypted save but decryptor parameters missing.", profile, slotKey, sw, path);
-
-                    var nonce = Convert.FromBase64String(header.NonceB64);
-                    var tag = Convert.FromBase64String(header.TagB64);
-                    var aad = Encoding.UTF8.GetBytes(headerJson); // AAD exactly as header on disk
-                    try
-                    {
-                        bodyBytes = _encryptor.Decrypt(bodyBytes, nonce, aad, tag);
-                    }
-                    catch (Exception)
-                    {
-                        return FinalCorrupt("Decryption failed (AAD/tag mismatch).", profile, slotKey, sw, path);
-                    }
+                    var corrupt = new LoadResult(ResultStatus.Corrupt, SaveErrorTranslator.Friendly(ResultStatus.Corrupt), path, sw.ElapsedMilliseconds, bodyBytes.LongLength, false);
+                    SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, corrupt);
+                    return corrupt;
                 }
 
-                // If compressed, decompress
+                // Encryption path is disabled (bail out if encountered)
+                if (!string.IsNullOrEmpty(header.Encrypt))
+                {
+                    var err = new LoadResult(ResultStatus.Corrupt, "Encrypted save but decryptor is disabled.", path, sw.ElapsedMilliseconds, bodyBytes.LongLength, false);
+                    SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, err);
+                    return err;
+                }
+
+                // Decompress if needed
                 if (!string.IsNullOrEmpty(header.Compress))
                 {
                     if (_compressor == null || !string.Equals(_compressor.Name, header.Compress, StringComparison.Ordinal))
-                        return FinalCorrupt("Compressed save but compressor not available.", profile, slotKey, sw, path);
-
+                    {
+                        var err = new LoadResult(ResultStatus.Error, "Compressed save but compressor not available.", path, sw.ElapsedMilliseconds, 0, false);
+                        SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, err);
+                        return err;
+                    }
                     bodyBytes = _compressor.Decompress(bodyBytes);
                 }
 
-                // Body is JSON for ComponentSnapshot[]
+                // Deserialize Components and apply (JsonUtility can't handle top-level arrays → tolerant fallback)
                 var bodyJson = Encoding.UTF8.GetString(bodyBytes);
-                var components = _serializer.Deserialize<ComponentSnapshot[]>(bodyJson);
+                ComponentSnapshot[] components;
+                try
+                {
+                    components = _serializer.Deserialize<ComponentSnapshot[]>(bodyJson);
+                }
+                catch
+                {
+                    var itemsWrap = _serializer.Deserialize<ArrayItemsWrapper<ComponentSnapshot>>(bodyJson);
+                    if (itemsWrap.Items != null && itemsWrap.Items.Length > 0)
+                        components = itemsWrap.Items;
+                    else
+                    {
+                        var compsWrap = _serializer.Deserialize<ArrayComponentsWrapper<ComponentSnapshot>>(bodyJson);
+                        components = compsWrap.Components ?? Array.Empty<ComponentSnapshot>();
+                    }
+                }
 
+                foreach (var s in _saveables) s.OnBeforeSave(); // parity hook (safe no-op)
                 ApplyAll(components);
                 foreach (var s in _saveables) s.OnAfterLoad();
 
-                var res = new LoadResult(ResultStatus.Ok, "Loaded.", path);
+                var ok = new LoadResult(ResultStatus.Ok, SaveErrorTranslator.Friendly(ResultStatus.Ok), path, sw.ElapsedMilliseconds, bodyBytes.LongLength, false);
+                SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, ok);
+                return ok;
+            }
+            catch (OperationCanceledException)
+            {
+                var res = new LoadResult(ResultStatus.Error, "Load canceled.", path, sw.ElapsedMilliseconds, 0, false);
                 SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, res);
                 return res;
             }
             catch (UnauthorizedAccessException uae)
             {
-                var res = new LoadResult(ResultStatus.Unauthorized, $"Unauthorized: {uae.Message}", path);
+                var res = new LoadResult(ResultStatus.Unauthorized, SaveErrorTranslator.Friendly(uae), path, sw.ElapsedMilliseconds, 0, false);
                 SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, res);
                 return res;
             }
             catch (Exception ex)
             {
-                var res = new LoadResult(ResultStatus.Error, $"Load failed: {ex.Message}", path);
+                var res = new LoadResult(ResultStatus.Error, SaveErrorTranslator.Friendly(ex), path, sw.ElapsedMilliseconds, 0, false);
                 SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, res);
                 return res;
             }
         }
 
-        public DeleteResult Delete(int slot, string profile = "Default")
-        {
-            var path = _storage.PathForSlot(profile, slot);
-            try
-            {
-                if (_storage.Exists(path)) _storage.Delete(path);
-                var meta = _storage.MetaPathForSlot(profile, slot);
-                if (_storage.Exists(meta)) _storage.Delete(meta);
-                return new DeleteResult(ResultStatus.Ok, "Deleted.", path);
-            }
-            catch (Exception ex)
-            {
-                return new DeleteResult(ResultStatus.Error, $"Delete failed: {ex.Message}", path);
-            }
-        }
+        // --------- Streaming Save (internal) ---------
 
-        // Autosave API
-        public SaveResult SaveAutosave(int index, SaveOptions options)
+        private async Task<SaveResult> SaveInternalAsync(int slot, SaveOptions options, int? autosaveIndex, IProgress<float>? progress, CancellationToken token)
         {
             var profile = options.ProfileName ?? "Default";
-            var slotKey = $"slot_autosave_{index}";
+            var slotKey = autosaveIndex.HasValue ? $"slot_autosave_{autosaveIndex.Value}" : $"slot_{slot}";
             SaveSignals.EmitBeforeSave(profile, slotKey, options);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            SaveProfiler.Begin();
+
+            // Hooks
+            foreach (var s in _saveables) s.OnBeforeSave();
+
+            var header = new SaveHeader
+            {
+                FormatId = "BPG.SAVE_v1",
+                Version = new SemVer { Major = 3, Minor = 0, Patch = 0 },
+                CreatedUtc = DateTime.UtcNow.ToString("o"),
+                ModifiedUtc = DateTime.UtcNow.ToString("o"),
+                AppVersion = options.AppVersion ?? Application.version,
+                ContentType = options.ContentType,
+                Profile = profile,
+                Summary = options.Summary,
+                Compress = null,
+                Encrypt = null,
+                Checksum = string.Empty,
+            };
+
             try
             {
-                foreach (var s in _saveables) s.OnBeforeSave();
+                // 1) Serialize components (JSON body) — wrap array for JsonUtility
+                var components = CaptureAll();
+                var bodyJsonWrapped = _serializer.Serialize(new ArrayItemsWrapper<ComponentSnapshot> { Items = components });
+                var plainBytes = Encoding.UTF8.GetBytes(bodyJsonWrapped);
 
-                var file = BuildLogicalFile(profile, options);
-                var bodyJson = _serializer.Serialize(file.Components);
-                var bodyBytes = Encoding.UTF8.GetBytes(bodyJson);
+                // 2) Produce FINAL BODY BYTES into a temp file (streaming gzip if enabled)
+                var bodyTmpPath = Path.Combine(_storage.GetProfileDir(profile), $".__body_{Guid.NewGuid():N}.tmp");
+                Directory.CreateDirectory(Path.GetDirectoryName(bodyTmpPath)!);
 
-                byte[] transformed = bodyBytes;
-                string? compressName = null;
-                if (options.UseCompression && _compressor != null)
-                {
-                    transformed = _compressor.Compress(transformed);
-                    compressName = _compressor.Name;
-                }
-
-                string? encryptName = null;
-                byte[]? nonce = null;
-                byte[]? tag = null;
+                long bytesForChecksum;
                 if (options.UseEncryption && _encryptor != null)
                 {
-                    encryptName = _encryptor.Name;
-                    nonce = RandomNonce(12);
-                    file.Header.Encrypt = encryptName;
-                    file.Header.NonceB64 = Convert.ToBase64String(nonce);
-                    file.Header.TagB64 = null;
-                    file.Header.Compress = compressName;
-                    file.Header.Checksum = string.Empty;
-                    file.Header.AppVersion = options.AppVersion;
-                    file.Header.ContentType = options.ContentType;
-                    file.Header.Summary = options.Summary;
-                    var aad = Encoding.UTF8.GetBytes(_serializer.Serialize(file.Header));
-                    var ct = _encryptor.Encrypt(transformed, nonce, aad, out var tagOut);
-                    tag = tagOut;
-                    transformed = ct;
+                    // (Usually disabled in your build) — compress first (in-memory) if requested, then encrypt, then stream ciphertext to temp
+                    if (options.UseCompression && _compressor != null)
+                    {
+                        plainBytes = _compressor.Compress(plainBytes);
+                        header.Compress = _compressor.Name;
+                    }
+
+                    var nonce = RandomNonce(12);
+                    header.Encrypt = _encryptor.Name;
+                    header.NonceB64 = Convert.ToBase64String(nonce);
+                    header.TagB64 = null;
+
+                    var aad = Encoding.UTF8.GetBytes(_serializer.Serialize(header)); // header with empty checksum/tag
+                    var ciphertext = _encryptor.Encrypt(plainBytes, nonce, aad, out var tag);
+                    header.TagB64 = Convert.ToBase64String(tag);
+
+                    using (var outFs = new FileStream(bodyTmpPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, true))
+                    {
+                        int written = 0;
+                        for (int offset = 0; offset < ciphertext.Length; offset += CHUNK_SIZE)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var count = Math.Min(CHUNK_SIZE, ciphertext.Length - offset);
+                            await outFs.WriteAsync(ciphertext.AsMemory(offset, count), token);
+                            written += count;
+                            progress?.Report((float)written / Math.Max(1, ciphertext.Length) * 0.5f);
+                        }
+                    }
+
+                    bytesForChecksum = new FileInfo(bodyTmpPath).Length;
                 }
                 else
                 {
-                    file.Header.Encrypt = null;
-                    file.Header.NonceB64 = null;
-                    file.Header.TagB64 = null;
-                    file.Header.Compress = compressName;
-                    file.Header.Checksum = string.Empty;
-                    file.Header.AppVersion = options.AppVersion;
-                    file.Header.ContentType = options.ContentType;
-                    file.Header.Summary = options.Summary;
+                    // No encryption: stream either gzip or plain into the temp file
+                    if (options.UseCompression && _compressor != null)
+                    {
+                        header.Compress = _compressor.Name;
+                        using var outFs = new FileStream(bodyTmpPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, true);
+                        using (var gz = new System.IO.Compression.GZipStream(outFs, System.IO.Compression.CompressionLevel.Optimal, leaveOpen: true))
+                        {
+                            for (int offset = 0; offset < plainBytes.Length; offset += CHUNK_SIZE)
+                            {
+                                token.ThrowIfCancellationRequested();
+                                var count = Math.Min(CHUNK_SIZE, plainBytes.Length - offset);
+                                await gz.WriteAsync(plainBytes.AsMemory(offset, count), token);
+                                if (plainBytes.Length >= STREAM_THRESHOLD)
+                                {
+                                    var pct = (float)offset / Math.Max(1, plainBytes.Length);
+                                    progress?.Report(0.1f + pct * 0.6f);
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        using var outFs = new FileStream(bodyTmpPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, true);
+                        for (int offset = 0; offset < plainBytes.Length; offset += CHUNK_SIZE)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var count = Math.Min(CHUNK_SIZE, plainBytes.Length - offset);
+                            await outFs.WriteAsync(plainBytes.AsMemory(offset, count), token);
+                            if (plainBytes.Length >= STREAM_THRESHOLD)
+                            {
+                                var pct = (float)offset / Math.Max(1, plainBytes.Length);
+                                progress?.Report(0.1f + pct * 0.6f);
+                            }
+                        }
+                    }
+
+                    bytesForChecksum = new FileInfo(bodyTmpPath).Length;
                 }
 
-                var checksum = Checksum.Sha256HexBytes(transformed);
-                file.Header.Checksum = checksum;
-                if (encryptName != null && tag != null)
-                    file.Header.TagB64 = Convert.ToBase64String(tag);
+                // 3) Compute checksum over FINAL BODY BYTES (from temp file, streaming)
+                using (var sha = SHA256.Create())
+                using (var inFs = new FileStream(bodyTmpPath, FileMode.Open, FileAccess.Read, FileShare.Read, CHUNK_SIZE, true))
+                {
+                    var buffer = ArrayPool<byte>.Shared.Rent(CHUNK_SIZE);
+                    try
+                    {
+                        int read;
+                        while ((read = await inFs.ReadAsync(buffer, 0, CHUNK_SIZE, token)) > 0)
+                            sha.TransformBlock(buffer, 0, read, null, 0);
+                        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+                    header.Checksum = ToHex(sha.Hash!);
+                }
 
-                var headerJson = _serializer.Serialize(file.Header);
-                var headerBytes = Encoding.UTF8.GetBytes(headerJson);
+                // 4) Compose: write header + newline + stream-copy body temp into final file atomically
+                var finalPath = autosaveIndex.HasValue ? _storage.PathForAutosave(profile, autosaveIndex.Value) : _storage.PathForSlot(profile, slot);
+                using (var writer = new FileStreamWriter(finalPath))
+                {
+                    var headerBytes = Encoding.UTF8.GetBytes(_serializer.Serialize(header));
+                    await writer.WriteAsync(headerBytes, token);
+                    await writer.WriteAsync(new byte[] { (byte)'\n' }, token);
 
-                var outPath = _storage.PathForAutosave(profile, index);
-                var bytes = new byte[headerBytes.Length + 1 + transformed.Length];
-                Buffer.BlockCopy(headerBytes, 0, bytes, 0, headerBytes.Length);
-                bytes[headerBytes.Length] = (byte)'\n';
-                Buffer.BlockCopy(transformed, 0, bytes, headerBytes.Length + 1, transformed.Length);
+                    using var tmpFs = new FileStream(bodyTmpPath, FileMode.Open, FileAccess.Read, FileShare.Read, CHUNK_SIZE, true);
+                    var buf = ArrayPool<byte>.Shared.Rent(CHUNK_SIZE);
+                    try
+                    {
+                        int read;
+                        long copied = 0;
+                        while ((read = await tmpFs.ReadAsync(buf, 0, CHUNK_SIZE, token)) > 0)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            await writer.WriteAsync(new ReadOnlyMemory<byte>(buf, 0, read), token);
+                            copied += read;
+                            progress?.Report(0.7f + (float)copied / Math.Max(1, bytesForChecksum) * 0.3f);
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buf);
+                    }
 
-                _storage.WriteBytes(outPath, bytes);
+                    writer.Commit();
+                }
 
+                // 5) Clean temp
+                try { if (File.Exists(bodyTmpPath)) File.Delete(bodyTmpPath); } catch { /* best-effort */ }
+
+                var approxBytes = new FileInfo(finalPath).Length;
+
+                // 6) Diagnostics + metadata
                 var duration = sw.ElapsedMilliseconds;
-                WriteMetadataAutosave(index, profile, duration, options.Summary, bytes.Length);
+                var compressionRatio = (plainBytes.LongLength > 0) ? Math.Round(bytesForChecksum / (double)plainBytes.LongLength, 4) : 1.0;
+                var pipeline =
+                    !string.IsNullOrEmpty(header.Encrypt) && !string.IsNullOrEmpty(header.Compress) ? "gzip+aes-gcm" :
+                    !string.IsNullOrEmpty(header.Encrypt) ? "aes-gcm" :
+                    !string.IsNullOrEmpty(header.Compress) ? "gzip" : "plain";
 
-                var res = new SaveResult(ResultStatus.Ok, "Autosaved.", outPath);
-                SaveSignals.EmitAfterSave(profile, slotKey, duration, res);
-                return res;
+                var diag = SaveProfiler.End(bytesForChecksum, 0, compressionRatio, pipeline);
+                SaveProfiler.WriteJson(_storage.RootPath, diag, _serializer);
+
+                if (autosaveIndex.HasValue)
+                    _storage.Write(_storage.MetaPathForAutosave(profile, autosaveIndex.Value),
+                        _serializer.Serialize(MetadataUtility.CreateForAutosave(autosaveIndex.Value, profile, duration, options.Summary, approxBytes)));
+                else
+                    _storage.Write(_storage.MetaPathForSlot(profile, slot),
+                        _serializer.Serialize(MetadataUtility.CreateForManual(slot, profile, duration, options.Summary, approxBytes)));
+
+                foreach (var s in _saveables) s.OnAfterLoad(); // optional parity hook
+
+                var result = new SaveResult(ResultStatus.Ok, SaveErrorTranslator.Friendly(ResultStatus.Ok),
+                                            finalPath, duration, bytesForChecksum, compressionRatio);
+
+                SaveSignals.EmitAfterSave(profile, slotKey, duration, diag);
+                progress?.Report(1f);
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                return new SaveResult(ResultStatus.Error, "Save canceled.", autosaveIndex.HasValue ? _storage.PathForAutosave(profile, autosaveIndex.Value) : _storage.PathForSlot(profile, slot), 0, 0, 1.0);
             }
             catch (Exception ex)
             {
-                var res = new SaveResult(ResultStatus.Error, $"Autosave failed: {ex.Message}", _storage.PathForAutosave(profile, index));
-                SaveSignals.EmitAfterSave(profile, slotKey, sw.ElapsedMilliseconds, res);
-                return res;
+                var msg = SaveErrorTranslator.Friendly(ex);
+                return new SaveResult(ResultStatus.Error, msg, autosaveIndex.HasValue ? _storage.PathForAutosave(profile, autosaveIndex.Value) : _storage.PathForSlot(profile, slot), 0, 0, 1.0);
             }
         }
 
-        // Profiles API convenience
-        public IEnumerable<string> GetAllProfiles() => _storage.GetAllProfiles();
-        public void CreateProfile(string name) => _storage.CreateProfile(name);
-        public void DeleteProfile(string name) => _storage.DeleteProfile(name);
-        public IEnumerable<(string savePath, string metaPath)> GetAllSlots(string profile) => _storage.GetAllSlots(profile);
 
-        // ---------------- Internals ----------------
+        // --------- Helpers ---------
 
-        private SaveFile BuildLogicalFile(string profile, SaveOptions opts)
+        /// <summary>
+        /// Reads bytes up to and including the first '\n' (0x0A) and returns the bytes *without* the newline.
+        /// Leaves the stream positioned immediately after the newline. Handles optional '\r' before '\n'.
+        /// </summary>
+        private static async Task<byte[]> ReadHeaderLineBytesAsync(FileStream fs, CancellationToken token)
         {
-            var snapshots = CaptureAll();
-            var header = new SaveHeader
+            var buffer = ArrayPool<byte>.Shared.Rent(CHUNK_SIZE);
+            try
             {
-                CreatedUtc = DateTime.UtcNow.ToString("o"),
-                ModifiedUtc = DateTime.UtcNow.ToString("o"),
-                AppVersion = opts.AppVersion,
-                ContentType = opts.ContentType,
-                Profile = profile,
-                Summary = opts.Summary,
-                Checksum = string.Empty
-            };
-            return new SaveFile { Header = header, Components = snapshots };
+                using var headerMs = new MemoryStream(256);
+                while (true)
+                {
+                    int read = await fs.ReadAsync(buffer, 0, CHUNK_SIZE, token);
+                    if (read <= 0)
+                        break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        if (buffer[i] == (byte)'\n')
+                        {
+                            // Write everything before '\n', but drop an optional preceding '\r'
+                            int segmentLen = i;
+                            if (segmentLen > 0 && buffer[i - 1] == (byte)'\r')
+                                segmentLen--;
+
+                            headerMs.Write(buffer, 0, segmentLen);
+
+                            // Reposition stream to byte right after '\n'
+                            long overshoot = read - (i + 1);
+                            if (overshoot > 0)
+                                fs.Seek(-overshoot, SeekOrigin.Current);
+
+                            return headerMs.ToArray();
+                        }
+                    }
+
+                    // No newline in this chunk; write all and continue
+                    headerMs.Write(buffer, 0, read);
+                }
+
+                // If we get here, no newline was found; return entire file as header (error case)
+                return headerMs.ToArray();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         private ComponentSnapshot[] CaptureAll()
@@ -392,17 +434,35 @@ namespace BPG.Aion
 
         private ComponentSnapshot CaptureOne(ISaveable s, string key)
         {
+            var target = s.AsComponent;
+            var t = target.GetType();
+
+            // Prefer generated capture if available.
+            var gen = GeneratedSnapshotCache.Get(t);
+            if (gen != null && gen.Capture != null && gen.SnapshotType != null)
+            {
+                // Capture → DTO object (typed), then serialize using generic method with the DTO runtime type.
+                var dtoObj = gen.Capture.Invoke(target, Array.Empty<object?>());
+                var dtoJson = SerializeToType(dtoObj, gen.SnapshotType);
+
+                // Store a single synthetic entry named "__dto" with the DTO JSON and its Type.
+                var entry = new FieldEntry
+                {
+                    Name = "__dto",
+                    Type = gen.SnapshotType.AssemblyQualifiedName ?? gen.SnapshotType.FullName ?? "Snapshot",
+                    JsonValue = dtoJson
+                };
+
+                return new ComponentSnapshot { Key = key, Fields = new[] { entry } };
+            }
+
+            // Fallback: reflection path over [SaveField] members (existing behavior)
             var fields = new List<FieldEntry>();
             var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-            var target = s.AsComponent;
-            foreach (var f in target.GetType().GetFields(flags))
+            foreach (var f in t.GetFields(flags))
             {
                 if (f.GetCustomAttribute<SaveFieldAttribute>(true) == null) continue;
-
                 var val = f.GetValue(target);
-                if (!IsSupportedType(f.FieldType))
-                    throw new InvalidOperationException($"Unsupported [SaveField] type '{f.FieldType}' on {target.GetType().Name}.{f.Name}");
-
                 var jsonValue = SerializeToType(val, f.FieldType);
                 fields.Add(new FieldEntry
                 {
@@ -411,21 +471,53 @@ namespace BPG.Aion
                     JsonValue = jsonValue
                 });
             }
+
             var ordered = fields.OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
             return new ComponentSnapshot { Key = key, Fields = ordered };
         }
 
+
         private void ApplyAll(IEnumerable<ComponentSnapshot> snapshots)
         {
             var map = _saveables.ToDictionary(GetStableKeyFor, s => s, StringComparer.Ordinal);
+
             foreach (var snap in snapshots)
             {
                 if (!map.TryGetValue(snap.Key, out var s)) continue;
-                var target = s.AsComponent;
-                var type = target.GetType();
-                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
-                var fieldMap = type
+                var target = s.AsComponent;
+                var t = target.GetType();
+
+                // If generated binding exists AND the snapshot contains a "__dto" entry,
+                // deserialize it into the exact generated DTO type and call RestoreSnapshot.
+                var gen = GeneratedSnapshotCache.Get(t);
+                if (gen != null && gen.SnapshotType != null)
+                {
+                    var dtoEntry = snap.Fields.FirstOrDefault(f => f.Name == "__dto");
+                    if (!string.IsNullOrEmpty(dtoEntry.JsonValue))
+                    {
+                        // Deserialize DTO as the precise generated type (NOT as object)
+                        var dtoObj = DeserializeToType(dtoEntry.JsonValue!, gen.SnapshotType);
+
+                        if (gen.RestoreTyped != null)
+                        {
+                            gen.RestoreTyped.Invoke(target, new[] { dtoObj });
+                            continue; // done with this component
+                        }
+                        if (gen.RestoreObject != null)
+                        {
+                            gen.RestoreObject.Invoke(target, new[] { dtoObj });
+                            continue; // done with this component
+                        }
+
+                        // If we had a DTO but neither restore method existed, fall back to reflection
+                        // (unlikely, but keeps things resilient).
+                    }
+                }
+
+                // Reflection fallback: assign individual [SaveField] members.
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var fieldMap = t
                     .GetFields(flags)
                     .Where(f => f.GetCustomAttribute<SaveFieldAttribute>(true) != null)
                     .ToDictionary(f => f.Name, f => f, StringComparer.Ordinal);
@@ -434,18 +526,17 @@ namespace BPG.Aion
                 {
                     if (!fieldMap.TryGetValue(entry.Name, out var field)) continue;
                     var value = DeserializeToType(entry.JsonValue, field.FieldType);
-                    if (!IsSupportedType(field.FieldType))
-                        throw new InvalidOperationException($"Unsupported [SaveField] type '{field.FieldType}' during load.");
                     field.SetValue(target, value);
                 }
             }
         }
 
+
         private static string GetHierarchyPath(GameObject go)
         {
             var stack = new Stack<string>();
-            var current = go.transform;
-            while (current != null) { stack.Push(current.name); current = current.parent; }
+            var t = go.transform;
+            while (t != null) { stack.Push(t.name); t = t.parent; }
             return string.Join("/", stack);
         }
 
@@ -455,7 +546,6 @@ namespace BPG.Aion
             var comp = s.AsComponent;
             var attr = comp.GetType().GetCustomAttribute<SaveKeyAttribute>(true);
             if (attr != null && !string.IsNullOrWhiteSpace(attr.Key)) return attr.Key;
-
             var path = GetHierarchyPath(comp.gameObject);
             var typeName = comp.GetType().FullName;
             var siblings = comp.GetComponents(comp.GetType());
@@ -463,60 +553,119 @@ namespace BPG.Aion
             return $"{path}|{typeName}|{index}";
         }
 
+        private string SerializeGeneric(object? value, Type type)
+        {
+            var m = typeof(ISerializer).GetMethod(nameof(ISerializer.Serialize))!;
+            var g = m.MakeGenericMethod(type);
+            return (string)g.Invoke(_serializer, new object?[] { value })!;
+        }
+
+        private object? DeserializeGeneric(string json, Type type)
+        {
+            var m = typeof(ISerializer).GetMethod(nameof(ISerializer.Deserialize))!;
+            var g = m.MakeGenericMethod(type);
+            return g.Invoke(_serializer, new object?[] { json });
+        }
+
+        // ====== CRITICAL FIX: Box primitive/string values so JsonUtility writes real data ======
+
+        /// <summary>
+        /// Serialize any value of 'type' by wrapping it in Box&lt;T&gt; so JsonUtility will emit the data.
+        /// Produces JSON like: {"Value":42} or {"Value":"Alice"}.
+        /// </summary>
         private string SerializeToType(object? value, Type type)
         {
-            var method = typeof(ISerializer).GetMethod(nameof(ISerializer.Serialize))!;
-            var generic = method.MakeGenericMethod(type);
-            return (string)generic.Invoke(_serializer, new object?[] { value })!;
+            var boxType = typeof(Box<>).MakeGenericType(type);
+            var box = Activator.CreateInstance(boxType);
+            var valField = boxType.GetField("Value");
+            if (valField != null) valField.SetValue(box, value);
+
+            var m = typeof(ISerializer).GetMethod(nameof(ISerializer.Serialize))!;
+            var g = m.MakeGenericMethod(boxType);
+            return (string)g.Invoke(_serializer, new object?[] { box })!;
         }
 
+        /// <summary>
+        /// Deserialize JSON produced by SerializeToType back into the requested type by reading Box&lt;T&gt;.Value.
+        /// </summary>
         private object? DeserializeToType(string json, Type type)
         {
-            var method = typeof(ISerializer).GetMethod(nameof(ISerializer.Deserialize))!;
-            var generic = method.MakeGenericMethod(type);
-            return generic.Invoke(_serializer, new object?[] { json });
+            var boxType = typeof(Box<>).MakeGenericType(type);
+            var m = typeof(ISerializer).GetMethod(nameof(ISerializer.Deserialize))!;
+            var g = m.MakeGenericMethod(boxType);
+            var box = g.Invoke(_serializer, new object?[] { json });
+            var valField = boxType.GetField("Value");
+            return valField != null && box != null ? valField.GetValue(box) : null;
         }
 
-        private static bool IsSupportedType(Type t)
+        private static string ChecksumHex(byte[] data)
         {
-            return t == typeof(string)
-                || t == typeof(bool)
-                || t == typeof(byte) || t == typeof(sbyte)
-                || t == typeof(short) || t == typeof(ushort)
-                || t == typeof(int) || t == typeof(uint)
-                || t == typeof(long) || t == typeof(ulong)
-                || t == typeof(float) || t == typeof(double) || t == typeof(decimal);
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(data);
+            return ToHex(hash);
+        }
+
+        private static string ToHex(byte[] hash)
+        {
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash) sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
 
         private static byte[] RandomNonce(int len)
         {
             var b = new byte[len];
-            using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+            using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(b);
             return b;
         }
 
-        private LoadResult FinalCorrupt(string msg, string profile, string slotKey, System.Diagnostics.Stopwatch sw, string path)
-        {
-            var res = new LoadResult(ResultStatus.Corrupt, msg, path);
-            SaveSignals.EmitAfterLoad(profile, slotKey, sw.ElapsedMilliseconds, res);
-            return res;
-        }
+        // Wrappers to satisfy JsonUtility (top-level arrays)
+        [Serializable]
+        private struct ArrayItemsWrapper<T> { public T[] Items; }
 
-        private void WriteMetadataManual(int slot, string profile, long durationMs, string? summary, long approxBytes)
-        {
-            var meta = MetadataUtility.CreateForManual(slot, profile, durationMs, summary, approxBytes);
-            var path = _storage.MetaPathForSlot(profile, slot);
-            var json = _serializer.Serialize(meta);
-            _storage.Write(path, json);
-        }
+        [Serializable]
+        private struct ArrayComponentsWrapper<T> { public T[] Components; }
 
-        private void WriteMetadataAutosave(int index, string profile, long durationMs, string? summary, long approxBytes)
+        // Box used to serialize individual field values
+        [Serializable]
+        private struct Box<T> { public T Value; }
+
+        private static async Task<byte[]> ReadToEndAsync(Stream stream, IProgress<float>? progress, CancellationToken token)
         {
-            var meta = MetadataUtility.CreateForAutosave(index, profile, durationMs, summary, approxBytes);
-            var path = _storage.MetaPathForAutosave(profile, index);
-            var json = _serializer.Serialize(meta);
-            _storage.Write(path, json);
+            const int BufSize = CHUNK_SIZE;
+            var ms = new MemoryStream(capacity: 64 * 1024);
+            var buffer = ArrayPool<byte>.Shared.Rent(BufSize);
+            try
+            {
+                long totalRead = 0;
+                long remainingKnown = -1;
+
+                if (stream is FileStream fs)
+                {
+                    try { remainingKnown = Math.Max(0, fs.Length - fs.Position); }
+                    catch { remainingKnown = -1; }
+                }
+
+                int read;
+                while ((read = await stream.ReadAsync(buffer, 0, BufSize, token)) > 0)
+                {
+                    await ms.WriteAsync(buffer, 0, read, token);
+                    totalRead += read;
+
+                    if (remainingKnown > 0 && progress != null)
+                    {
+                        var frac = (float)totalRead / Math.Max(1, remainingKnown);
+                        progress.Report(frac);
+                    }
+                }
+
+                return ms.ToArray();
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
     }
 }

@@ -1,13 +1,10 @@
-// com.bpg.aion/Runtime/Attributes/SaveField.cs
+// Packages/com.bpg.aion/Runtime/Attributes/SaveFieldAttribute.cs
 #nullable enable
 using System;
 
 namespace BPG.Aion
 {
-    /// <summary>
-    /// Marks a field to be captured/restored by the save system.
-    /// Supported (Phase 1): bool, numeric primitives, string.
-    /// </summary>
-    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = true)]
+    /// <summary>Marks a field or property for inclusion in save snapshots.</summary>
+    [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = true, AllowMultiple = false)]
     public sealed class SaveFieldAttribute : Attribute { }
 }
