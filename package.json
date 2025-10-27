@@ -1,7 +1,7 @@
 {
     "name": "com.bpg.aion",
     "displayName": "Aion",
-    "version": "0.7.5",
+    "version": "0.7.6",
     "unity": "2021.3",
     "description": "Aion — a deterministic, versioned save system for Unity that preserves and restores game state with precision and permanence.",
     "keywords": [
