@@ -28,12 +28,12 @@ Aion Save System is a modular, deterministic save/load framework for Unity 6.2+.
 3. Click **+** → **Add package from Git URL...**
 4. Paste the URL and press Enter:
    ```
-   https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.2
+   https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.3
    ```
 
 ### Add to `manifest.json` manually
 ```json
-"com.bpg.aion": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.2"
+"com.bpg.aion": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.3"
 ```
 
 ### Manual Install (Offline)
