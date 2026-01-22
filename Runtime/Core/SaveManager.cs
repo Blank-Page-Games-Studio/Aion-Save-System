@@ -181,7 +181,7 @@ namespace BPG.Aion
             var header = new SaveHeader
             {
                 FormatId = "BPG.SAVE_v1",
-                Version = new SemVer { Major = 3, Minor = 0, Patch = 0 },
+                Version = new SemVer { Major = 0, Minor = 1, Patch = 5 },
                 CreatedUtc = DateTime.UtcNow.ToString("o"),
                 ModifiedUtc = DateTime.UtcNow.ToString("o"),
                 AppVersion = options.AppVersion ?? Application.version,

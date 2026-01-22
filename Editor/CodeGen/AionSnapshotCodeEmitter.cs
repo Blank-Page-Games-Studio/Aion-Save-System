@@ -210,10 +210,10 @@ namespace BPG.Aion
             }
         }
 
-        // --- NEW: Kaynak-kod dostu tÃ¼r yazÄ±cÄ±sÄ± ---
+        // --- NEW: Kaynak-kod dostu tür yazýcýsý ---
         private static string TypeToCSharp(Type t)
         {
-            // ByRef -> element type (ref/out) kaynaÄŸa yazÄ±lmaz
+            // ByRef -> element type (ref/out) kaynaða yazýlmaz
             if (t.IsByRef)
                 t = t.GetElementType()!;
 
@@ -225,11 +225,11 @@ namespace BPG.Aion
             if (t.IsGenericParameter)
                 return t.Name;
 
-            // Nullable<T> (sÃ¼sleme yerine aÃ§Ä±k yazÄ±m tercih: global::System.Nullable<T>)
+            // Nullable<T> (süsleme yerine açýk yazým tercih: global::System.Nullable<T>)
             if (IsNullableValueType(t, out var underlying))
                 return $"global::System.Nullable<{TypeToCSharp(underlying!)}>";
 
-            // KapalÄ± generic
+            // Kapalý generic
             if (t.IsGenericType)
             {
                 var def = t.GetGenericTypeDefinition();
@@ -238,7 +238,7 @@ namespace BPG.Aion
                 if (tick >= 0) name = name.Substring(0, tick);
 
                 var ns = def.Namespace;
-                // Ä°Ã§ iÃ§e tÃ¼rler iÃ§in dÄ±ÅŸ tip zinciri
+                // Ýç içe türler için dýþ tip zinciri
                 var owner = def.DeclaringType != null ? DeclaringTypeChain(def.DeclaringType) + "." : string.Empty;
 
                 var args = t.GetGenericArguments();
@@ -247,25 +247,25 @@ namespace BPG.Aion
                 return $"global::{(ns != null ? ns + "." : string.Empty)}{owner}{name}<{argsSrc}>";
             }
 
-            // Ä°lkel/Ã¶zel adlar
+            // Ýlkel/özel adlar
             if (PrimitiveKeyword(t, out var kw))
                 return kw;
 
-            // Ä°Ã§ iÃ§e tÃ¼r
+            // Ýç içe tür
             if (t.IsNested && t.DeclaringType != null)
                 return $"global::{t.DeclaringType.Namespace}.{DeclaringTypeChain(t.DeclaringType)}.{t.Name}";
 
-            // DÃ¼z tÃ¼r
+            // Düz tür
             if (!string.IsNullOrEmpty(t.Namespace))
                 return $"global::{t.Namespace}.{t.Name}";
 
-            // Ä°simsiz namespace vb.
+            // Ýsimsiz namespace vb.
             return $"global::{t.Name}";
         }
 
         private static bool PrimitiveKeyword(Type t, out string keyword)
         {
-            // C# anahtar kelime eÅŸlemeleri
+            // C# anahtar kelime eþlemeleri
             if (t == typeof(void)) { keyword = "void"; return true; }
             if (t == typeof(bool)) { keyword = "bool"; return true; }
             if (t == typeof(byte)) { keyword = "byte"; return true; }
@@ -294,7 +294,7 @@ namespace BPG.Aion
 
         private static string DeclaringTypeChain(Type t)
         {
-            // En dÄ±ÅŸtan iÃ§e "Outer.Inner.MoreInner" Ã¼ret
+            // En dýþtan içe "Outer.Inner.MoreInner" üret
             var stack = new Stack<string>();
             var cur = t;
             while (cur != null)
