@@ -33,13 +33,13 @@ It provides robust, efficient, and flexible game state persistence using clean J
 4. Paste the following URL and press Enter:
 
    ```
-   https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.9
+   https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.10
    ```
 
 ### Add to `manifest.json`
 
 ```json
-"com.bpg.aion": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.9"
+"com.bpg.aion": "https://github.com/Blank-Page-Games-Studio/Aion-Save-System.git#v0.7.10"
 ```
 
 ### Manual Install (Offline)
