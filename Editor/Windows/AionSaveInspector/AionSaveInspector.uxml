@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <uie:Toolbar name="toolbar" class="aion-toolbar">
+        <ui:Label text="Profile" class="toolbar-label" />
+        <ui:DropdownField name="profileDropdown" class="toolbar-dropdown" />
+        <ui:VisualElement class="toolbar-flex" />
+        <uie:ToolbarSearchField name="searchField" class="toolbar-search" />
+        <uie:ToolbarButton name="refreshButton" text="Refresh" />
+        <uie:ToolbarButton name="openFolderButton" text="Open Folder" />
+    </uie:Toolbar>
+
+    <ui:VisualElement class="aion-body">
+        <ui:VisualElement class="aion-left-column">
+            <ui:Label text="Slots" class="section-title" />
+            <ui:Label name="slotPlaceholderLabel" text="No slots found." class="slot-placeholder" />
+            <ui:ListView name="slotList" class="slot-list" />
+        </ui:VisualElement>
+
+        <ui:ScrollView class="aion-right-column" name="detailsScroll">
+            <ui:VisualElement class="card summary-card">
+                <ui:Label text="Summary" class="section-title" />
+
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="File Path" class="summary-key" />
+                    <ui:Label name="summaryPathValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Size" class="summary-key" />
+                    <ui:Label name="summarySizeValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Profile" class="summary-key" />
+                    <ui:Label name="summaryProfileValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Created" class="summary-key" />
+                    <ui:Label name="summaryCreatedValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Modified" class="summary-key" />
+                    <ui:Label name="summaryModifiedValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Compression" class="summary-key" />
+                    <ui:Label name="summaryCompressionValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Encryption" class="summary-key" />
+                    <ui:Label name="summaryEncryptionValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Checksum" class="summary-key" />
+                    <ui:Label name="summaryChecksumValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Slot Name" class="summary-key" />
+                    <ui:Label name="summarySlotNameValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Scene/Chapter" class="summary-key" />
+                    <ui:Label name="summarySceneValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Playtime" class="summary-key" />
+                    <ui:Label name="summaryPlaytimeValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Build" class="summary-key" />
+                    <ui:Label name="summaryBuildValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="summary-row">
+                    <ui:Label text="Notes" class="summary-key" />
+                    <ui:Label name="summaryNotesValue" text="-" class="summary-value" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+
+            <ui:VisualElement class="card actions-card">
+                <ui:Label text="Actions" class="section-title" />
+                <ui:VisualElement class="actions-row">
+                    <ui:Button name="actionRevealButton" class="action-button" text="Reveal in Finder" />
+                    <ui:Button name="actionCopyPathButton" class="action-button" text="Copy Path" />
+                </ui:VisualElement>
+                <ui:Label name="statusLabel" class="status-label status-info" text="" />
+            </ui:VisualElement>
+
+            <ui:Foldout name="advancedFoldout" text="Advanced" value="false" class="card advanced-card">
+                <ui:TextField name="headerJsonField" label="Header JSON" multiline="true" class="json-field" />
+                <ui:TextField name="metadataJsonField" label="Metadata JSON" multiline="true" class="json-field" />
+            </ui:Foldout>
+        </ui:ScrollView>
+    </ui:VisualElement>
+</ui:UXML>

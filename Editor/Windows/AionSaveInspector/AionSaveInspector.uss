@@ -1,0 +1,247 @@
+.aion-root {
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+.aion-toolbar {
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    min-height: 32px;
+}
+
+.toolbar-label {
+    margin-right: 6px;
+    unity-font-style-and-weight: bold;
+}
+
+.toolbar-dropdown {
+    min-width: 120px;
+    margin-right: 8px;
+}
+
+.toolbar-flex {
+    flex-grow: 1;
+}
+
+.toolbar-search {
+    width: 240px;
+    margin-right: 6px;
+}
+
+.aion-body {
+    flex-direction: row;
+    flex-grow: 1;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 6px;
+    padding-bottom: 8px;
+}
+
+.aion-left-column {
+    flex-direction: column;
+    flex-shrink: 0;
+    width: 280px;
+    min-width: 240px;
+    max-width: 320px;
+    padding-right: 8px;
+    border-right-width: 1px;
+    border-right-color: rgba(120, 120, 120, 0.35);
+    margin-right: 10px;
+}
+
+.slot-list {
+    flex-grow: 1;
+    margin-top: 6px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    border-width: 1px;
+    border-color: rgba(120, 120, 120, 0.4);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.slot-list .unity-list-view__item {
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+.slot-placeholder {
+    margin-top: 6px;
+    margin-bottom: 4px;
+    color: rgba(200, 200, 200, 0.75);
+}
+
+.aion-right-column {
+    flex-grow: 1;
+    padding-right: 4px;
+}
+
+.card {
+    padding: 10px;
+    margin-bottom: 10px;
+    border-width: 1px;
+    border-color: rgba(120, 120, 120, 0.4);
+    border-radius: 6px;
+    background-color: rgba(60, 60, 60, 0.15);
+}
+
+.section-title {
+    unity-font-style-and-weight: bold;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.summary-row {
+    flex-direction: row;
+    align-items: flex-start;
+    margin-bottom: 4px;
+}
+
+.summary-row:last-child {
+    margin-bottom: 0px;
+}
+
+.summary-key {
+    min-width: 110px;
+    color: rgba(210, 210, 210, 0.85);
+}
+
+.summary-value {
+    flex-grow: 1;
+    white-space: normal;
+    color: rgba(235, 235, 235, 0.95);
+}
+
+.actions-row {
+    flex-direction: row;
+}
+
+.actions-row > Button {
+    margin-right: 6px;
+}
+
+.actions-row > Button:last-child {
+    margin-right: 0px;
+}
+
+.status-label {
+    margin-top: 6px;
+    font-size: 10px;
+    color: rgba(210, 210, 210, 0.85);
+    display: none;
+}
+
+.status-info {
+    color: rgba(210, 210, 210, 0.85);
+}
+
+.status-error {
+    color: rgba(255, 140, 140, 0.95);
+    unity-font-style-and-weight: bold;
+}
+
+.advanced-card {
+    padding-top: 8px;
+}
+
+.json-field {
+    margin-top: 6px;
+    margin-bottom: 6px;
+    min-height: 100px;
+}
+
+.json-field:last-child {
+    margin-bottom: 0px;
+}
+
+/* Slot Card List Items */
+.slot-card {
+    flex-direction: row;
+    align-items: center;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    margin-left: 0px;
+    margin-right: 0px;
+    margin-top: 0px;
+    margin-bottom: 0px;
+    border-width: 1px;
+    border-color: rgba(120, 120, 120, 0.35);
+    border-radius: 6px;
+    background-color: rgba(70, 70, 70, 0.18);
+}
+
+.slot-card--selected {
+    border-color: rgba(120, 170, 255, 0.8);
+    background-color: rgba(90, 130, 200, 0.22);
+}
+
+.slot-thumb {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    margin-right: 8px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.06);
+    background-color: rgba(120, 150, 200, 0.35);
+}
+
+.slot-text {
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 0px;
+}
+
+.slot-title {
+    unity-font-style-and-weight: bold;
+    font-size: 12px;
+    margin-bottom: 2px;
+    color: rgba(240, 240, 240, 0.98);
+}
+
+.slot-subtitle {
+    font-size: 10px;
+    color: rgba(210, 210, 210, 0.78);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.slot-badges {
+    flex-direction: column;
+    align-items: flex-end;
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+.slot-badge {
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    margin-bottom: 4px;
+    border-width: 1px;
+    border-color: rgba(160, 160, 160, 0.4);
+    border-radius: 10px;
+    background-color: rgba(80, 80, 80, 0.28);
+    unity-font-style-and-weight: bold;
+    font-size: 9px;
+    color: rgba(235, 235, 235, 0.95);
+}
+
+.slot-badge:last-child {
+    margin-bottom: 0px;
+}
+
+:last-child {
+    margin-bottom: 0px;
+}
+
+
+.action-button { margin-right: 6px; }
